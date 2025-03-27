@@ -748,32 +748,14 @@ class PianoVisualizer:
         self.screen.blit(time_text, (10, 40))
         
         # Draw chord progress if in highlight mode
-        if self.highlighting_mode and self.chord_sequence:
-            progress_text = self.font.render(
-                f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
-                True,
-                (255, 255, 255),
-            )
-            self.screen.blit(progress_text, (10, 190))
-
-        # Display highlighted notes in play-along mode
-        if self.highlighting_mode and self.highlighted_notes:
-            highlighted = [
-                self.get_note_name(note)
-                for note in self.highlighted_notes
-                if self.highlighted_notes[note]
-            ]
-            notes_str = "Highlighted: " + ", ".join(highlighted)
-            notes_text = self.font.render(notes_str, True, (255, 255, 100))
-            # Display chord progress
-            progress_text = self.font.render(
-                f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
-                True,
-                (255, 255, 255),
-            )
-            self.screen.blit(progress_text, (10, 220))
-            self.screen.blit(notes_text, (10, 190))
-            # Display currently highlighted notes
+        if self.highlighting_mode:
+            if self.chord_sequence:
+                progress_text = self.font.render(
+                    f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
+                    True,
+                    (255, 255, 255),
+                )
+                self.screen.blit(progress_text, (10, 190))
             if self.highlighted_notes:
                 highlighted = [
                     self.get_note_name(note)
