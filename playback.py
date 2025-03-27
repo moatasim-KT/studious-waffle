@@ -7,10 +7,12 @@ import numpy as np
 from collections import defaultdict
 import sounddevice as sd
 import soundfile as sf
+import pygame.midi
+import argparse
 
 
 class PianoVisualizer:
-    def __init__(self, width=1600, height=500):
+    def __init__(self, width=1600, height=500, mode="playback"):
         pygame.init()
         pygame.midi.init()
         pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
@@ -18,6 +20,7 @@ class PianoVisualizer:
         self.height = height
         self.screen = pygame.display.set_mode((width, height))
         pygame.display.set_caption("MIDI to Piano Keystrokes Visualizer")
+        self.mode = mode  # "playback" or "play-along"
 
         # Piano dimensions
         self.white_key_width = 41  # Reduced from 60 to fit more keys
@@ -79,6 +82,74 @@ class PianoVisualizer:
         self.sample_rate = 44100  # Assuming 44.1kHz sample rate for the WAV files
         self.piano_samples = {}
         self.load_piano_samples()
+
+        # MIDI Input setup
+        self.midi_input = None
+        self.setup_midi_input()
+
+    def setup_midi_input(self):
+        """Set up MIDI input device"""
+        # Initialize pygame.midi if not already initialized
+        if not pygame.midi.get_init():
+            pygame.midi.init()
+
+        # List available MIDI input devices
+        input_devices = []
+        for i in range(pygame.midi.get_count()):
+            device_info = pygame.midi.get_device_info(i)
+            is_input = device_info[2]
+            if is_input:
+                device_name = device_info[1].decode("utf-8")
+                input_devices.append((i, device_name))
+                print(f"MIDI Input #{i}: {device_name}")
+
+        # If we have MIDI input devices available
+        if input_devices:
+            # Find first available input device
+            for device_id, name in input_devices:
+                try:
+                    self.midi_input = pygame.midi.Input(device_id)
+                    print(f"Connected to MIDI device: {name}")
+                    break
+                except pygame.midi.MidiException as e:
+                    print(f"Could not open MIDI device {device_id} ({name}): {e}")
+
+            if self.midi_input is None:
+                print(
+                    "No MIDI input devices could be opened. Using computer keyboard only."
+                )
+        else:
+            print("No MIDI input devices found. Using computer keyboard only.")
+
+    def process_midi_input(self):
+        """Process incoming MIDI messages from the external MIDI keyboard"""
+        if self.midi_input is None:
+            return
+
+        # Check if there are any pending MIDI events
+        if self.midi_input.poll():
+            # Read all available MIDI events
+            midi_events = self.midi_input.read(64)
+
+            for event in midi_events:
+                # event[0] contains the MIDI data as a list [status, data1, data2, 0]
+                # For note events: status (144-159=note on, 128-143=note off), data1=note, data2=velocity
+                status = event[0][0]
+                note = event[0][1]
+                velocity = event[0][2]
+
+                # Check if the note is within our piano range
+                if self.first_note <= note < self.first_note + self.total_keys:
+                    # Note On event (in MIDI, channel 1 note on = 144, channel 2 = 145, etc.)
+                    if 144 <= status <= 159 and velocity > 0:
+                        self.active_notes[note] = True
+                        # self.play_note(note, velocity)
+                    # Note Off event (or Note On with velocity 0)
+                    elif (128 <= status <= 143) or (
+                        144 <= status <= 159 and velocity == 0
+                    ):
+                        self.active_notes[note] = False
+                        # self.stop_note(note)
 
     def load_piano_samples(self):
         """Load piano samples from WAV files and map them to MIDI notes."""
@@ -633,15 +704,214 @@ class PianoVisualizer:
                     # Decrease volume
                     self.volume = max(0.0, self.volume - 0.05)
 
+        return True  # Continue running
+
+    def check_highlighted_played(self):
+        """Check if the user played all the currently highlighted notes"""
+        if not self.highlighting_mode or not self.highlighted_notes:
+            return
+
+        # Get current highlighted notes
+        highlighted = set(
+            note for note in self.highlighted_notes if self.highlighted_notes[note]
+        )
+        active = set(note for note in self.active_notes if self.active_notes[note])
+
+        # If all highlighted notes are being played (and nothing extra)
+        if highlighted == active and highlighted:
+            # Flash confirmation and automatically move to next chord
+            pygame.display.flip()
+            pygame.time.delay(200)  # Brief flash
+            self.next_chord()
+            
+    def render_ui(self):
+        """Render UI elements"""
+        # Draw playback status
+        status = (
+            "Playing"
+            if self.playing and not self.paused
+            else "Paused" if self.paused else "Stopped"
+        )
+        status_text = self.font.render(f"Status: {status}", True, (255, 255, 255))
+        self.screen.blit(status_text, (10, 10))
+        
+        # Draw MIDI input status
+        midi_status = "MIDI: Connected" if self.midi_input else "MIDI: Not Connected"
+        midi_text = self.font.render(midi_status, True, (255, 255, 255))
+        self.screen.blit(midi_text, (300, 10))
+
+
+        # Draw current time
+        time_text = self.font.render(
+            f"Time: {self.current_time/1000:.2f}s", True, (255, 255, 255)
+        )
+        self.screen.blit(time_text, (10, 40))
+        
+        # Draw chord progress if in highlight mode
+        if self.highlighting_mode:
+            if self.chord_sequence:
+                progress_text = self.font.render(
+                    f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
+                    True,
+                    (255, 255, 255),
+                )
+                self.screen.blit(progress_text, (10, 190))
+            if self.highlighted_notes:
+                highlighted = [
+                    self.get_note_name(note)
+                    for note in self.highlighted_notes
+                    if self.highlighted_notes[note]
+                ]
+                notes_str = "Highlighted: " + ", ".join(highlighted)
+                notes_text = self.font.render(notes_str, True, (255, 255, 100))
+                self.screen.blit(notes_text, (10, 220))
+        
+        # Draw controls help
+        controls_text = self.font.render(
+            "Controls: SPACE = Play/Pause, R = Reset, ESC = Quit, +/- = Volume",
+            True,
+            (255, 255, 255),
+        )
+        self.screen.blit(controls_text, (10, 70))
+
+        # Draw volume indicator
+        volume_text = self.font.render(
+            f"Volume: {int(self.volume * 100)}%", True, (255, 255, 255)
+        )
+        self.screen.blit(volume_text, (10, 100))
+
+        # Display note range information
+        range_text = self.font.render(
+            f"Key Range: {self.get_note_name(self.first_note)} to {self.get_note_name(self.first_note + self.total_keys - 1)}",
+            True,
+            (255, 255, 255),
+        )
+        self.screen.blit(range_text, (10, 130))
+        
+        # Display currently playing notes
+        active_notes = [
+            self.get_note_name(note)
+            for note in self.active_notes
+            if self.active_notes[note]
+        ]
+        if active_notes:
+            notes_str = "Playing: " + ", ".join(active_notes[:8])
+            if len(active_notes) > 8:
+                notes_str += f" +{len(active_notes) - 8} more"
+            notes_text = self.font.render(notes_str, True, (255, 255, 255))
+            self.screen.blit(notes_text, (10, 160))
+
+    def run(self, midi_file):
+        """Main application loop"""
+        if not self.load_midi(midi_file):
+            print(f"Failed to load MIDI file: {midi_file}")
+            return
+
+        clock = pygame.time.Clock()
+        running = True
+
+        if self.mode == "playback":
+            # Start playback automatically after loading the MIDI file
+            self.play()
+
+        while running:
+            # Process MIDI input from external keyboard
+            self.process_midi_input()
+            
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        running = False
+                    elif event.key == pygame.K_SPACE:
+                        if self.mode == "playback":
+                            if not self.playing:
+                                self.play()
+                            else:
+                                self.pause()
+                        # In play-along mode, space could be used for something else,
+                        # or ignored, depending on desired behavior.
+                        # For now, we'll just print a message.
+                        elif self.mode == "play-along":
+                            print("Space key not active in play-along mode.")
+                    elif event.key == pygame.K_r:
+                        self.stop()
+                    elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                        # Increase volume
+                        self.volume = min(1.0, self.volume + 0.05)
+                    elif event.key == pygame.K_MINUS:
+                        # Decrease volume
+                        self.volume = max(0.0, self.volume - 0.05)
+                        
+            # Update state
+            dt = clock.tick(60) / 1000.0  # Delta time in seconds
+            if self.mode == "playback":
+                self.update(dt)
+            
+            # Check if highlighted notes are played correctly
+            self.check_highlighted_played()
+
+            # Render
+            self.screen.fill((40, 40, 40))
+            self.draw_piano()
+            self.render_ui()
+            pygame.display.flip()
+
+        pygame.quit()
+    def handle_keyboard_events(self, events):
+        """Handle keyboard events for piano playing"""
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return False  # Signal to quit
+
+                # Navigation controls for highlight mode
+                if event.key == pygame.K_RIGHT:
+                    self.next_chord()
+                elif event.key == pygame.K_LEFT:
+                    self.prev_chord()
+                elif event.key == pygame.K_h:
+                    self.highlighting_mode = not self.highlighting_mode
+                    message = (
+                        "Highlighting mode ON"
+                        if self.highlighting_mode
+                        else "Highlighting mode OFF"
+                    )
+                    print(message)
+                elif event.key == pygame.K_SPACE:
+                    if not self.playing:
+                        self.play()
+                    else:
+                        self.pause()
+                elif event.key == pygame.K_r:
+                    self.stop()
+                elif event.key in [pygame.K_PLUS, pygame.K_EQUALS]:
+                    # Increase volume
+                    self.volume = min(1.0, self.volume + 0.05)
+                elif event.key == pygame.K_MINUS:
+                    # Decrease volume
+                    self.volume = max(0.0, self.volume - 0.05)
+
 
         return True  # Continue running
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python midi_visualizer.py <midi_file>")
+    parser = argparse.ArgumentParser(description="MIDI Piano Visualizer")
+    parser.add_argument("midi_file", nargs="?", help="Path to the MIDI file")
+    parser.add_argument(
+        "--mode",
+        choices=["playback", "play-along"],
+        default="playback",
+        help="Mode: playback or play-along",
+    )
+    args = parser.parse_args()
+
+    if not args.midi_file:
+        print("Please provide a MIDI file as a command-line argument.")
         sys.exit(1)
 
-    midi_file = sys.argv[1]
-    visualizer = PianoVisualizer()
-    visualizer.run(midi_file)
+    visualizer = PianoVisualizer(mode=args.mode)
+    visualizer.run(args.midi_file)
