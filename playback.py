@@ -171,6 +171,11 @@ class PianoVisualizer:
                 # Check if the sample file exists
                 if not os.path.isfile(file_path):
                     print(f"Sample file not found: {file_path}")
+                    # Generate sine wave instead
+                    duration = 1.0  # 1 second duration
+                    data = self.generate_sine_wave(note, duration)
+                    self.piano_samples[note] = data
+                    print(f"Synthesized sample for {note_name} ({note})")
                     continue
 
                 try:
@@ -198,6 +203,14 @@ class PianoVisualizer:
 
         except Exception as e:
             print(f"Error loading piano samples: {e}")
+
+    def generate_sine_wave(self, note, duration=1.0):
+        """Generates a sine wave for a given MIDI note and duration."""
+        frequency = 440.0 * (2.0 ** ((note - 69) / 12.0))
+        samples = int(self.sample_rate * duration)
+        t = np.linspace(0, duration, samples, False)
+        wave = np.sin(2 * np.pi * frequency * t)
+        return wave
 
     def play_note(self, note, velocity=127):
         """Play a note with given velocity using Sounddevice."""
