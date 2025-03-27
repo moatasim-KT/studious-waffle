@@ -5,6 +5,8 @@ import sys
 import time
 import numpy as np
 from collections import defaultdict
+import sounddevice as sd
+import soundfile as sf
 
 
 class PianoVisualizer:
@@ -65,77 +67,91 @@ class PianoVisualizer:
         self.tempo = 500000  # Default tempo (microseconds per beat)
         self.midi_events = []
         self.current_event_idx = 0
+        # Playback mode variables
+        self.highlighting_mode = False
+        self.chord_sequence = []
+        self.current_chord_idx = 0
+        self.highlighted_notes = defaultdict(lambda: False)  # Notes highlighted from MIDI
 
         # Sound variables
         self.sounds = {}
         self.volume = 0.5
-        self.generate_piano_sounds()
+        self.sample_rate = 44100  # Assuming 44.1kHz sample rate for the WAV files
+        self.piano_samples = {}
+        self.load_piano_samples()
 
-    def generate_piano_sounds(self):
-        """Generate sine wave sounds for each piano note"""
-        sample_rate = 44100
-        max_amplitude = 32767  # For 16-bit audio
+    def load_piano_samples(self):
+        """Load piano samples from WAV files and map them to MIDI notes."""
+        # Assuming WAV files are named like "piano_C4.wav", "piano_D#5.wav", etc.
+        # and located in a "samples" directory
+        try:
+            import os
 
-        # Only generate sounds for the keys we're displaying
-        for note in range(self.first_note, self.first_note + self.total_keys):
-            # Calculate frequency using the equal temperament formula: f = 2^(n-49)/12 * 440Hz
-            frequency = 440.0 * (2.0 ** ((note - 69) / 12.0))
+            samples_dir = "samples"  # You might need to adjust the path
+            if not os.path.exists(samples_dir):
+                os.makedirs(samples_dir)
+                print(f"Created samples directory: {samples_dir}")
+                return
 
-            # Generate 1 second of sound (can be shorter in practice)
-            duration = 2.0  # seconds
-            samples = int(duration * sample_rate)
+            for note in range(self.first_note, self.first_note + self.total_keys):
+                note_name = self.get_note_name(note)
+                file_path = os.path.join(samples_dir, f"piano_{note_name}.wav")
 
-            # Generate sine wave
-            t = np.linspace(0, duration, samples, False)
-            sine_wave = np.sin(2 * np.pi * frequency * t)
+                # Check if the sample file exists
+                if not os.path.isfile(file_path):
+                    print(f"Sample file not found: {file_path}")
+                    continue
 
-            # Apply envelope to avoid clicks and make piano-like sound
-            attack = int(0.01 * sample_rate)  # 10ms attack
-            decay = int(0.1 * sample_rate)  # 100ms decay
-            release = int(1.5 * sample_rate)  # 1.5s release
+                try:
+                    data, fs = sf.read(file_path)
+                    if fs != self.sample_rate:
+                        print(
+                            f"Resampling {file_path} from {fs} Hz to {self.sample_rate} Hz"
+                        )
+                        # Simple resampling using numpy - for better quality consider librosa or scipy
+                        ratio = self.sample_rate / fs
+                        new_length = int(len(data) * ratio)
+                        data_resampled = np.interp(
+                            np.linspace(0, len(data), new_length),
+                            np.arange(len(data)),
+                            data,
+                        )
+                        data = data_resampled
+                    self.piano_samples[note] = data
+                    print(f"Loaded sample for {note_name} ({note})")
+                except Exception as e:
+                    print(f"Error loading sample for {note_name} ({note}): {e}")
 
-            # Create envelope
-            envelope = np.ones(samples)
-            # Attack
-            envelope[:attack] = np.linspace(0, 1, attack)
-            # Decay
-            decay_end = attack + decay
-            envelope[attack:decay_end] = np.linspace(1, 0.7, decay)
-            # Release
-            if decay_end < samples:
-                release_start = min(samples - release, decay_end)
-                envelope[release_start:] = np.linspace(
-                    envelope[release_start], 0, samples - release_start
-                )
+            if not self.piano_samples:
+                print("No piano samples loaded. Check the samples directory and file names.")
 
-            # Apply envelope to sine wave
-            sine_wave = sine_wave * envelope
-
-            # Convert to 16-bit PCM
-            audio_data = (sine_wave * max_amplitude * 0.5).astype(np.int16)
-
-            # Create stereo sound
-            stereo_data = np.column_stack((audio_data, audio_data))
-
-            # Create sound object
-            sound = pygame.sndarray.make_sound(stereo_data)
-
-            # Store in dictionary
-            self.sounds[note] = sound
+        except Exception as e:
+            print(f"Error loading piano samples: {e}")
 
     def play_note(self, note, velocity=127):
-        """Play a note with given velocity"""
-        if note in self.sounds:
-            # Set volume based on velocity (MIDI velocity is 0-127)
-            volume = (velocity / 127.0) * self.volume
-            self.sounds[note].set_volume(volume)
-            self.sounds[note].play()
+        """Play a note with given velocity using Sounddevice."""
+        if note in self.piano_samples:
+            try:
+                # Adjust volume based on velocity
+                volume = (velocity / 127.0) * self.volume
+                samples = self.piano_samples[note] * volume
+
+                # Play the sample using Sounddevice
+                sd.play(samples, self.sample_rate)
+                # You might want to keep track of active streams for stopping notes later
+                #  but for now we assume short samples that stop quickly
+
+            except Exception as e:
+                print(f"Error playing note {note}: {e}")
+        else:
+            print(f"No sample found for note {note}")
 
     def stop_note(self, note):
-        """Stop a note from playing"""
-        if note in self.sounds:
-            # Fade out instead of immediate stop for smoother sound
-            self.sounds[note].fadeout(50)  # 50ms fadeout
+        """Stop a note from playing (if possible)."""
+        # With this basic implementation, we can't stop individual notes
+        #  since we don't track active streams.  A more advanced system
+        #  would be needed for accurate note stopping, or using shorter samples.
+        pass  # For now, do nothing
 
     def is_black_key(self, note):
         """Check if a MIDI note number is a black key"""
@@ -263,12 +279,17 @@ class PianoVisualizer:
             midi_file = mido.MidiFile(file_path)
             # Extract all note events with absolute timing
             self.midi_events = []
-
+            self.chord_sequence = []  # Initialize chord sequence
+            self.current_chord_idx = 0
             ticks_per_beat = midi_file.ticks_per_beat
             tempo = 500000  # Default tempo in microseconds per beat
-
+            
+            # Variables for chord extraction
+            events = []
+            
             for track in midi_file.tracks:
                 absolute_time = 0
+                current_notes = set()
                 for msg in track:
                     # Convert delta time to absolute time in milliseconds
                     delta_ticks = msg.time
@@ -282,19 +303,80 @@ class PianoVisualizer:
                         self.midi_events.append(
                             (absolute_time, "note_on", msg.note, msg.velocity)
                         )
+                        # Chord extraction
+                        current_notes.add(msg.note)
+                        events.append((absolute_time, "chord", set(current_notes)))
                     elif msg.type == "note_off" or (
                         msg.type == "note_on" and msg.velocity == 0
                     ):
                         self.midi_events.append((absolute_time, "note_off", msg.note))
+                        # Chord extraction
+                        if msg.note in current_notes:
+                            current_notes.remove(msg.note)
+                        
 
             # Sort events by time
             self.midi_events.sort(key=lambda x: x[0])
-            self.current_event_idx = 0
-            self.current_time = 0
+            
+            #Chord Extraction
+             # Sort events by time and remove duplicates
+            events.sort(key=lambda x: x[0])
+
+            # Extract unique chords
+            unique_chords = []
+            prev_chord = set()
+
+            for time, event_type, chord in events:
+                if chord != prev_chord and len(chord) > 0:
+                    unique_chords.append(chord)
+                    prev_chord = chord
+
+            self.chord_sequence = unique_chords
+            
+
+            print(
+                f"Loaded {len(self.chord_sequence)} unique chords/notes from MIDI file"
+            )
             return True
         except Exception as e:
             print(f"Error loading MIDI file: {e}")
             return False
+        # Extract chords (notes that play simultaneously)
+        events = []
+        for track in midi_file.tracks:
+            abs_time = 0
+            current_notes = set()
+
+            for msg in track:
+                abs_time += msg.time
+
+                if msg.type == "note_on" and msg.velocity > 0:
+                    current_notes.add(msg.note)
+                    events.append((abs_time, "chord", set(current_notes)))
+                elif msg.type == "note_off" or (
+                    msg.type == "note_on" and msg.velocity == 0
+                ):
+                    if msg.note in current_notes:
+                        current_notes.remove(msg.note)
+
+        # Sort events by time and remove duplicates
+        events.sort(key=lambda x: x[0])
+
+        # Extract unique chords
+        unique_chords = []
+        prev_chord = set()
+
+        for time, event_type, chord in events:
+            if chord != prev_chord and len(chord) > 0:
+                unique_chords.append(chord)
+                prev_chord = chord
+
+        self.chord_sequence = unique_chords
+        self.current_chord_idx = 0
+
+        print(
+            f"Loaded {len(self.chord_sequence)} unique chords/notes from MIDI file"
+        )
 
     def play(self):
         """Start MIDI playback"""
@@ -316,7 +398,61 @@ class PianoVisualizer:
         self.active_notes.clear()
         # Stop all sounds
         pygame.mixer.stop()
+        self.highlighted_notes.clear()
 
+    def next_chord(self):
+        """Move to the next chord in the sequence"""
+        if not self.chord_sequence:
+            return
+
+        # Clear previous highlights
+        self.highlighted_notes.clear()
+
+        # Move to next chord
+        if self.current_chord_idx < len(self.chord_sequence):
+            chord = self.chord_sequence[self.current_chord_idx]
+            for note in chord:
+                if self.first_note <= note < self.first_note + self.total_keys:
+                    self.highlighted_notes[note] = True
+
+            self.current_chord_idx += 1
+
+            # Display chord info
+            notes = [
+                self.get_note_name(note)
+                for note in chord
+                if self.first_note <= note < self.first_note + self.total_keys
+            ]
+            #print(
+            #    f"Chord {self.current_chord_idx}/{len(self.chord_sequence)}: {', '.join(notes)}"
+            #)
+    def prev_chord(self):
+        """Move to the previous chord in the sequence"""
+        if not self.chord_sequence:
+            return
+
+        # Clear previous highlights
+        self.highlighted_notes.clear()
+
+        # Move to previous chord
+        self.current_chord_idx = max(0, self.current_chord_idx - 2)
+        if 0 <= self.current_chord_idx < len(self.chord_sequence):
+            chord = self.chord_sequence[self.current_chord_idx]
+            for note in chord:
+                if self.first_note <= note < self.first_note + self.total_keys:
+                    self.highlighted_notes[note] = True
+
+            self.current_chord_idx += 1
+
+            # Display chord info
+            notes = [
+                self.get_note_name(note)
+                for note in chord
+                if self.first_note <= note < self.first_note + self.total_keys
+            ]
+            #print(
+            #    f"Chord {self.current_chord_idx}/{len(self.chord_sequence)}: {', '.join(notes)}"
+            #)
     def update(self, dt):
         """Update playback state"""
         if not self.playing or self.paused or not self.midi_events:
@@ -356,7 +492,6 @@ class PianoVisualizer:
             if self.current_event_idx >= len(self.midi_events):
                 self.playing = False
                 break
-
     def render_ui(self):
         """Render UI elements"""
         # Draw playback status
@@ -396,7 +531,43 @@ class PianoVisualizer:
         )
         self.screen.blit(range_text, (10, 130))
 
-        # Draw currently playing notes
+        # Draw chord progress if in highlight mode
+        if self.highlighting_mode and self.chord_sequence:
+            progress_text = self.font.render(
+                f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
+                True,
+                (255, 255, 255),
+            )
+            self.screen.blit(progress_text, (10, 190))
+
+        # Display highlighted notes in play-along mode
+        if self.highlighting_mode and self.highlighted_notes:
+            highlighted = [
+                self.get_note_name(note)
+                for note in self.highlighted_notes
+                if self.highlighted_notes[note]
+            ]
+            notes_str = "Highlighted: " + ", ".join(highlighted)
+            notes_text = self.font.render(notes_str, True, (255, 255, 100))
+            # Display chord progress
+            progress_text = self.font.render(
+                f"Chord: {self.current_chord_idx}/{len(self.chord_sequence)}",
+                True,
+                (255, 255, 255),
+            )
+            self.screen.blit(progress_text, (10, 220))
+            self.screen.blit(notes_text, (10, 190))
+            # Display currently highlighted notes
+            if self.highlighted_notes:
+                highlighted = [
+                    self.get_note_name(note)
+                    for note in self.highlighted_notes
+                    if self.highlighted_notes[note]
+                ]
+                notes_str = "Highlighted: " + ", ".join(highlighted)
+                notes_text = self.font.render(notes_str, True, (255, 255, 100))
+                self.screen.blit(notes_text, (10, 220))
+        # Display currently playing notes
         active_notes = [
             self.get_note_name(note)
             for note in self.active_notes
@@ -408,12 +579,16 @@ class PianoVisualizer:
                 notes_str += f" +{len(active_notes) - 8} more"
             notes_text = self.font.render(notes_str, True, (255, 255, 255))
             self.screen.blit(notes_text, (10, 160))
+        print("This is a test print statement")
 
     def run(self, midi_file):
         """Main application loop"""
         if not self.load_midi(midi_file):
             print(f"Failed to load MIDI file: {midi_file}")
             return
+
+        # Start playback automatically after loading the MIDI file
+        self.play()
 
         clock = pygame.time.Clock()
         running = True
@@ -451,6 +626,43 @@ class PianoVisualizer:
             pygame.display.flip()
 
         pygame.quit()
+    def handle_keyboard_events(self, events):
+        """Handle keyboard events for piano playing"""
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return False  # Signal to quit
+
+                # Navigation controls for highlight mode
+                if event.key == pygame.K_RIGHT:
+                    self.next_chord()
+                elif event.key == pygame.K_LEFT:
+                    self.prev_chord()
+                elif event.key == pygame.K_h:
+                    self.highlighting_mode = not self.highlighting_mode
+                    message = (
+                        "Highlighting mode ON"
+                        if self.highlighting_mode
+                        else "Highlighting mode OFF"
+                    )
+                    print(message)
+                elif event.key == pygame.K_SPACE:
+                    if not self.playing:
+                        self.play()
+                    else:
+                        self.pause()
+                    elif event.key == pygame.K_r:
+                        self.stop()
+                    elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                        # Increase volume
+                        self.volume = min(1.0, self.volume + 0.05)
+                    elif event.key == pygame.K_MINUS:
+                        # Decrease volume
+                        self.volume = max(0.0, self.volume - 0.05)
+
+
+
+        return True  # Continue running
 
 
 if __name__ == "__main__":
