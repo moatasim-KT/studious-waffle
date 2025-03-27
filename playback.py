@@ -209,8 +209,7 @@ class PianoVisualizer:
         frequency = 440.0 * (2.0 ** ((note - 69) / 12.0))
         samples = int(self.sample_rate * duration)
         t = np.linspace(0, duration, samples, False)
-        wave = np.sin(2 * np.pi * frequency * t)
-        return wave
+        return np.sin(2 * np.pi * frequency * t)
 
     def play_note(self, note, velocity=127):
         """Play a note with given velocity using Sounddevice."""
