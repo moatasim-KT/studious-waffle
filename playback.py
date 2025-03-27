@@ -887,7 +887,7 @@ class PianoVisualizer:
                         self.pause()
                 elif event.key == pygame.K_r:
                     self.stop()
-                elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                elif event.key in [pygame.K_PLUS, pygame.K_EQUALS]:
                     # Increase volume
                     self.volume = min(1.0, self.volume + 0.05)
                 elif event.key == pygame.K_MINUS:
