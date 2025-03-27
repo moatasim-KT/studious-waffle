@@ -1,5 +1,4 @@
-content = """# Piano Trainer
-
+# Piano Trainer
 ## Overview
 
 Piano Trainer is an interactive application designed to help musicians practice and improve their piano skills. It offers two main modes: "Play-along" and "Playback".
