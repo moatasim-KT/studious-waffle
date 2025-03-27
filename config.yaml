@@ -1,0 +1,3 @@
+midi_device: 0  # Default MIDI input device ID
+mode: playback  # Default mode: playback or play-along
+volume: 0.5  # Default volume
