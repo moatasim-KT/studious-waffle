@@ -341,31 +341,6 @@ class PianoVisualizer:
         except Exception as e:
             print(f"Error loading MIDI file: {e}")
             return False
-        # Extract chords (notes that play simultaneously)
-        events = []
-        for track in midi_file.tracks:
-            abs_time = 0
-            current_notes = set()
-
-            for msg in track:
-                abs_time += msg.time
-
-                if msg.type == "note_on" and msg.velocity > 0:
-                    current_notes.add(msg.note)
-                    events.append((abs_time, "chord", set(current_notes)))
-                elif msg.type == "note_off" or (
-                    msg.type == "note_on" and msg.velocity == 0
-                ):
-                    if msg.note in current_notes:
-                        current_notes.remove(msg.note)
-
-        # Sort events by time and remove duplicates
-        events.sort(key=lambda x: x[0])
-
-        # Extract unique chords
-        unique_chords = []
-        prev_chord = set()
-
         for time, event_type, chord in events:
             if chord != prev_chord and len(chord) > 0:
                 unique_chords.append(chord)
