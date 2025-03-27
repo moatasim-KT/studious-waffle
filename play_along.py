@@ -231,14 +231,9 @@ class PianoVisualizer:
         if relative_note < 0 or relative_note >= self.total_keys:
             return None
 
-        # Count white keys before this note
-        white_key_count = 0
-        for n in range(self.first_note, note):
-            if not self.is_black_key(n):
-                white_key_count += 1
+        white_key_count = self.count_white_keys_before(note)
 
         if not self.is_black_key(note):
-            # For white keys
             return self.piano_start_x + (white_key_count * self.white_key_width)
         else:
             # For black keys (positioned between white keys)
@@ -256,9 +251,7 @@ class PianoVisualizer:
                 if not self.is_black_key(n):
                     white_key_count_prev += 1
 
-            white_key_x = self.piano_start_x + (
-                (white_key_count_prev - 1) * self.white_key_width
-            )
+            white_key_x = self.piano_start_x + ((white_key_count_prev - 1) * self.white_key_width)
             return white_key_x + (self.white_key_width - self.black_key_width // 2)
 
     def draw_piano(self):

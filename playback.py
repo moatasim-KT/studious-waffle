@@ -132,8 +132,7 @@ class PianoVisualizer:
             midi_events = self.midi_input.read(64)
 
             for event in midi_events:
-                # event[0] contains the MIDI data as a list [status, data1, data2, 0]
-                # For note events: status (144-159=note on, 128-143=note off), data1=note, data2=velocity
+                # Extract MIDI data from the event
                 status = event[0][0]
                 note = event[0][1]
                 velocity = event[0][2]
@@ -241,14 +240,10 @@ class PianoVisualizer:
         if relative_note < 0 or relative_note >= self.total_keys:
             return None
 
-        # Count white keys before this note
-        white_key_count = 0
-        for n in range(self.first_note, note):
-            if not self.is_black_key(n):
-                white_key_count += 1
+        # Count white keys before this note using sum()
+        white_key_count = sum(not self.is_black_key(n) for n in range(self.first_note, note))
 
         if not self.is_black_key(note):
-            # For white keys
             return self.piano_start_x + (white_key_count * self.white_key_width)
         else:
             # For black keys (positioned between white keys)
@@ -423,6 +418,60 @@ class PianoVisualizer:
         print(
             f"Loaded {len(self.chord_sequence)} unique chords/notes from MIDI file"
         )
+
+    def _extract_midi_events(self, midi_file):
+        """Extract all note events with absolute timing"""
+        self.midi_events = []
+        self.chord_sequence = []  # Initialize chord sequence
+        ticks_per_beat = midi_file.ticks_per_beat
+        tempo = 500000  # Default tempo in microseconds per beat
+
+        # Variables for chord extraction
+        events = []
+        
+        for track in midi_file.tracks:
+            absolute_time = 0
+            current_notes = set()
+            for msg in track:
+                # Convert delta time to absolute time in milliseconds
+                delta_ticks = msg.time
+                delta_seconds = mido.tick2second(delta_ticks, ticks_per_beat, tempo)
+                absolute_time += delta_seconds * 1000  # Convert to milliseconds
+
+                if msg.type == "set_tempo":
+                    tempo = msg.tempo
+                    self.midi_events.append((absolute_time, "tempo", msg.tempo))
+                elif msg.type == "note_on" and msg.velocity > 0:
+                    self.midi_events.append(
+                        (absolute_time, "note_on", msg.note, msg.velocity)
+                    )
+                    # Chord extraction
+                    current_notes.add(msg.note)
+                    events.append((absolute_time, "chord", set(current_notes)))
+                elif msg.type == "note_off" or (
+                    msg.type == "note_on" and msg.velocity == 0
+                ):
+                    self.midi_events.append((absolute_time, "note_off", msg.note))
+                    # Chord extraction
+                    if msg.note in current_notes:
+                        current_notes.remove(msg.note)
+
+        # Sort events by time
+        self.midi_events.sort(key=lambda x: x[0])
+        
+        # Chord Extraction: Sort events by time and remove duplicates
+        events.sort(key=lambda x: x[0])
+
+        # Extract unique chords
+        unique_chords = []
+        prev_chord = set()
+
+        for time, event_type, chord in events:
+            if chord != prev_chord and len(chord) > 0:
+                unique_chords.append(chord)
+                prev_chord = chord
+
+        self.chord_sequence = unique_chords
 
     def play(self):
         """Start MIDI playback"""
@@ -614,12 +663,11 @@ class PianoVisualizer:
                 notes_text = self.font.render(notes_str, True, (255, 255, 100))
                 self.screen.blit(notes_text, (10, 220))
         # Display currently playing notes
-        active_notes = [
+        if active_notes := [
             self.get_note_name(note)
-            for note in self.active_notes
-            if self.active_notes[note]
-        ]
-        if active_notes:
+            for note, is_active in self.active_notes.items()
+            if is_active
+        ]:
             notes_str = "Playing: " + ", ".join(active_notes[:8])
             if len(active_notes) > 8:
                 notes_str += f" +{len(active_notes) - 8} more"
@@ -643,7 +691,7 @@ class PianoVisualizer:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+                    if event.key in (pygame.K_ESCAPE,):
                         running = False
                     elif event.key == pygame.K_SPACE:
                         if not self.playing:
@@ -712,10 +760,10 @@ class PianoVisualizer:
             return
 
         # Get current highlighted notes
-        highlighted = set(
+        highlighted = {
             note for note in self.highlighted_notes if self.highlighted_notes[note]
-        )
-        active = set(note for note in self.active_notes if self.active_notes[note])
+        }
+        active = {note for note in self.active_notes if self.active_notes[note]}
 
         # If all highlighted notes are being played (and nothing extra)
         if highlighted == active and highlighted:
@@ -823,7 +871,7 @@ class PianoVisualizer:
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+                    if event.key in (pygame.K_ESCAPE,):
                         running = False
                     elif event.key == pygame.K_SPACE:
                         if self.mode == "playback":
