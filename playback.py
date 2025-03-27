@@ -554,8 +554,6 @@ class PianoVisualizer:
                 notes_str += f" +{len(active_notes) - 8} more"
             notes_text = self.font.render(notes_str, True, (255, 255, 255))
             self.screen.blit(notes_text, (10, 160))
-        print("This is a test print statement")
-
     def run(self, midi_file):
         """Main application loop"""
         if not self.load_midi(midi_file):
