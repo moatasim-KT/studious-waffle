@@ -18,9 +18,9 @@ class PianoVisualizer:
         pygame.display.set_caption("MIDI to Piano Keystrokes Visualizer")
 
         # Piano dimensions - Significantly increased key sizes
-        self.white_key_width = 50  # Increased from 30
+        self.white_key_width = 30  # Increased from 30
         self.white_key_height = 220  # Increased from 200
-        self.black_key_width = 40  # Increased from 20
+        self.black_key_width = 20  # Increased from 20
         self.black_key_height = 130  # Increased from 120
 
         # Starting position for piano
@@ -32,8 +32,8 @@ class PianoVisualizer:
         self.note_colors = defaultdict(lambda: (180, 180, 255))
 
         # Reduced number of keys (from 88 to 36 keys - 3 octaves)
-        self.total_keys = 48  # Reduced from 88
-        self.first_note = 36  # MIDI note number for C3 (instead of A0 which is 21)
+        self.total_keys = 88  # Reduced from 88
+        self.first_note = 21  # MIDI note number for C3 (instead of A0 which is 21)
 
         # Increased font sizes for better visibility
         self.font = pygame.font.SysFont("Arial", 20)  # Increased from 22

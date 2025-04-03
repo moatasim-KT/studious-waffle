@@ -130,15 +130,15 @@ class PianoVisualizer:
                 absolute_time = 0
                 for msg in track:
                     absolute_time += msg.time
+                    # Extract tempo if present
+                    if msg.type == "set_tempo":
+                        self.tempo = msg.tempo
                     if msg.type == "note_on" and msg.velocity > 0:
                         self.midi_events.append(
                             (absolute_time, "note_on", msg.note, msg.velocity)
                         )
-                    elif msg.type == "note_off" or (
-                        msg.type == "note_on" and msg.velocity == 0
-                    ):
+                    elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
                         self.midi_events.append((absolute_time, "note_off", msg.note))
-
             # Sort events by time
             self.midi_events.sort(key=lambda x: x[0])
             self.status_message = f"MIDI file loaded: {file_path}"
@@ -384,6 +384,7 @@ class PianoVisualizer:
 
         running = True
         while running:
+            dt = clock.tick(60) / 1000.0  # dt in seconds
             for event in pygame.event.get():
                 running = self._handle_input(event)
                 if not running:
@@ -393,9 +394,8 @@ class PianoVisualizer:
                     self.width, self.height = event.size
                     self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
 
-            self._handle_midi_playback()
+            self._handle_midi_playback(dt)
             self.update()
-            clock.tick(60)
 
         self._cleanup()
 
@@ -418,7 +418,7 @@ class PianoVisualizer:
                     self.play_note(note, 100)
         return True
 
-    def _handle_midi_playback(self):
+    def _handle_midi_playback(self, dt):
         if not self.midi_file or self.paused or not self.midi_events:
             return
         while (self.current_event_idx < len(self.midi_events) and
@@ -436,7 +436,7 @@ class PianoVisualizer:
 
             self.current_event_idx += 1
 
-        self.current_time += 10  # Increment time for MIDI playback
+        self.current_time += dt
 
     def _cleanup(self):
         if self.stream:
